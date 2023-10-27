@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # TensorFlow C++ and Python Image Recognition Demo
 
 This example shows how you can load a pre-trained TensorFlow network and use it
@@ -97,3 +98,6 @@ academic gown 0.0103581
 pickelhaube 0.00800818
 bulletproof vest 0.0053509
 ```
+=======
+# ECC
+>>>>>>> a1bf0389939a827de1af23177a53c94aeb6f723d
