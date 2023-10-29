@@ -43,7 +43,6 @@ print(f"[DEBUG]: Data Loaded")
 print(f"[DEBUG]: Data Normalization Started..")
 train_images, validation_images = train_images / 255.0, validation_images / 255.0
 print(f"[DEBUG]: Data Normalization Completed..")
-
 # Adjust data type for memory optimization
 train_images = train_images.astype(np.float16)
 validation_images = validation_images.astype(np.float16)
@@ -92,7 +91,8 @@ with open('baseline_p3_history.json', 'w') as file:
     json.dump(history_dict, file)
 
 end_time = time.time()
-
+print(f"[DEBUG]: Process Completed.")
+print(f"[DEBUG]: Calculating Metrics..\n")
 # Calculating the metrics
 training_time = training_end_time - training_start_time
 latency = training_time / len(train_images)  # Time taken per image
@@ -102,7 +102,7 @@ memory_usage = psutil.virtual_memory().used / (1024 ** 3)  # In GB
 # Estimated AWS cost (assuming you trained for the full duration of execution)
 aws_cost_on_demand = estimate_aws_cost((end_time - start_time) / 3600)  # Convert seconds to hours
 aws_cost_spot = estimate_aws_cost((end_time - start_time) / 3600, pricing_model="Spot")
-
+print(f"[DEBUG]: Printing Final Metrics..")
 print(f"Total Execution Time: {end_time - start_time:.2f} seconds")
 print(f"Training Time: {training_time:.2f} seconds")
 print(f"Latency: {latency:.6f} seconds per image")
