@@ -22,6 +22,10 @@ def estimate_aws_cost(hours, instance_type="c6a.large", pricing_model="On Demand
     }
     return hours * pricing.get(instance_type, {}).get(pricing_model, 0)
 
+# Check if the TF_CONFIG environment variable is set (indicating multi-worker training)
+tf_config = os.environ.get('TF_CONFIG', '{}')
+strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
+print(f"TF_CONFIG: {tf_config}")
 
 # Start of the main script
 start_time = time.time()
@@ -46,24 +50,27 @@ print(f"[DEBUG]: Data Normalization Completed..")
 # Adjust data type for memory optimization
 train_images = train_images.astype(np.float16)
 validation_images = validation_images.astype(np.float16)
-print(f"[DEBUG]: Model Started..")
 
-baseline_cnn = tf.keras.models.Sequential([
-                          tf.keras.layers.Conv2D(filters=10,kernel_size=(5,5),input_shape=(32,32,3),strides=(1,1), activation='relu',kernel_initializer='he_normal'),
-                          tf.keras.layers.MaxPool2D((2,2),strides=2),
-                          tf.keras.layers.Conv2D(10,kernel_size=(5,5),strides=(1,1),activation='relu',kernel_initializer='he_normal'),
-                          tf.keras.layers.MaxPool2D((2,2),strides=2),
-                          tf.keras.layers.Flatten(),
-                          tf.keras.layers.Dense(20,activation='relu',kernel_initializer='he_normal'),
-                          tf.keras.layers.Dense(10,activation=None,kernel_initializer='he_normal')])
-print(f"[DEBUG]: Model Compilation Started..")
-baseline_cnn.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-                     loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                     metrics=[tf.keras.metrics.SparseCategoricalAccuracy()])
+print(f"[DEBUG]: Model Started..")
+# Creating model and compiling it within the strategy scope
+with strategy.scope():
+    baseline_cnn = tf.keras.models.Sequential([
+        tf.keras.layers.Conv2D(filters=10,kernel_size=(5,5),input_shape=(32,32,3),strides=(1,1), activation='relu',kernel_initializer='he_normal'),
+        tf.keras.layers.MaxPool2D((2,2),strides=2),
+        tf.keras.layers.Conv2D(10,kernel_size=(5,5),strides=(1,1),activation='relu',kernel_initializer='he_normal'),
+        tf.keras.layers.MaxPool2D((2,2),strides=2),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(20,activation='relu',kernel_initializer='he_normal'),
+        tf.keras.layers.Dense(10,activation=None,kernel_initializer='he_normal')])
+    
+    baseline_cnn.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        metrics=[tf.keras.metrics.SparseCategoricalAccuracy()])
+
 # Start the timer for training time
 training_start_time = time.time()
 
-baseline_cnn_his = baseline_cnn.fit(train_images, train_labels, epochs=200, batch_size=256, validation_data=(validation_images, validation_labels))
+baseline_cnn_his = baseline_cnn.fit(train_images, train_labels, epochs=100, batch_size=256, validation_data=(validation_images, validation_labels))
 print(f"[DEBUG]: Model Fitting Completed..")
 # End the timer for training time
 training_end_time = time.time()
