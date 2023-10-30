@@ -24,7 +24,8 @@ def estimate_aws_cost(hours, instance_type="c6a.large", pricing_model="On Demand
 
 # Check if the TF_CONFIG environment variable is set (indicating multi-worker training)
 tf_config = os.environ.get('TF_CONFIG', '{}')
-strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
+print(f"TF_CONFIG: {tf_config}")
+strategy = tf.distribute.MultiWorkerMirroredStrategy()
 print(f"TF_CONFIG: {tf_config}")
 
 # Start of the main script

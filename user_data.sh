@@ -2,7 +2,7 @@
 # Assumes AWS CLI is installed and has permissions to describe instances
 
 # Fetch all instances in the ASG
-INSTANCES=$(aws ec2 describe-instances --filters "Name=tag:aws:autoscaling:groupName,Values=YOUR_ASG_NAME" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text)
+INSTANCES=$(aws ec2 describe-instances --filters "Name=tag:aws:autoscaling:groupName,Values=ECC-EC2-Single-ASG" --query 'Reservations[*].Instances[*].PrivateIpAddress' --output text)
 
 # Convert the list into a format suitable for TF_CONFIG
 WORKERS=($(echo $INSTANCES | tr " " "\n"))
