@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: image-classification-job
+spec:
+  template:
+    spec:
+      containers:
+      - name: image-classification
+        image: 808556460535.dkr.ecr.us-east-1.amazonaws.com/image-classification:latest
+        volumeMounts:
+        - mountPath: /mnt/efs  # Mount path in the container
+          name: efs-volume
+      volumes:
+      - name: efs-volume
+        nfs:
+          server: fs-01d2ae932027ea024.efs.us-east-1.amazonaws.com  # Your EFS domain name
+          path: /  # The root of the EFS file system
+      restartPolicy: Never
+  backoffLimit: 0
