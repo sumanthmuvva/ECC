@@ -7,7 +7,7 @@ import psutil
 from ray.util.sgd.tf import TFTrainer
 from datetime import datetime, timedelta
 
-def estimate_aws_cost(hours, instance_type="c6a.large", pricing_model="On Demand", eks_cost_per_hour=0.10, efs_cost_per_gb_month=0.30):
+def estimate_aws_cost(hours, instance_type="c6a.large", pricing_model="On Demand", eks_cost_per_hour=0.10, efs_cost_per_gb_month=0.16):
     # Pricing information
     pricing = {
         "c6a.large": {"On Demand": 0.0765, "Spot": 0.0333},
@@ -27,7 +27,7 @@ def estimate_aws_cost(hours, instance_type="c6a.large", pricing_model="On Demand
     ecr_cost = pricing["ECR"]["per_gb_month"] * ecr_image_size * hours
     cloudwatch_cost = (pricing["CloudWatch"]["ingestion"] * cloudwatch_logs_size + pricing["CloudWatch"]["storage"] * cloudwatch_logs_size) * hours
     eks_cost = pricing["EKS"]["per_hour"] * hours
-    efs_cost = pricing["EFS"]["per_gb_month"] * efs_metered_size * hours # Assuming EFS usage similar to EBS
+    efs_cost = pricing["EFS"]["per_gb_month"] * efs_metered_size * hours
 
     total_cost = sum([instance_cost, ebs_cost, ecr_cost, cloudwatch_cost, eks_cost, efs_cost])
     return total_cost
