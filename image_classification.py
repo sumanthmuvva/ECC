@@ -1,120 +1,173 @@
-import os
-import json
+import ray
+import tensorflow as tf
+import numpy as np
+import boto3
 import time
 import psutil
-import matplotlib.pyplot as plt
-import numpy as np
-import tensorflow as tf
-import warnings
+from ray.util.sgd.tf import TFTrainer
+from datetime import datetime, timedelta
 
-warnings.filterwarnings('ignore')
-
-
-def estimate_aws_cost(hours, instance_type="c6a.large", pricing_model="On Demand"):
-    """
-    Estimate AWS cost given the hours of usage, instance type, and pricing model.
-    """
+def estimate_aws_cost(hours, instance_type="c6a.large", pricing_model="On Demand", eks_cost_per_hour=0.10, efs_cost_per_gb_month=0.30):
+    # Pricing information
     pricing = {
-        "c6a.large": {
-            "On Demand": 0.0765,
-            "Spot": 0.0333
-        }
+        "c6a.large": {"On Demand": 0.0765, "Spot": 0.0333},
+        "EBS": {"per_gb_month": 0.08 / 30 / 24},
+        "ECR": {"per_gb_month": 0.10 / 30 / 24},
+        "CloudWatch": {"ingestion": 0.50 / 30 / 24, "storage": 0.03 / 30 / 24},
+        "EKS": {"per_hour": 0.10},
+        "EFS": {"per_gb_month": 0.16 / 30 / 24}
     }
-    return hours * pricing.get(instance_type, {}).get(pricing_model, 0)
 
-# Check if the TF_CONFIG environment variable is set (indicating multi-worker training)
-tf_config = os.environ.get('TF_CONFIG', '{}')
-print(f"TF_CONFIG: {tf_config}")
-strategy = tf.distribute.MultiWorkerMirroredStrategy()
-print(f"TF_CONFIG: {tf_config}")
+    # Calculations for each service
+    ebs_used_vol = get_used_ebs_volume_in_gb()
+    ecr_image_size = get_ecr_image_size('image-classification-dis')
+    cloudwatch_logs_size = get_cloudwatch_log_size()
+    efs_metered_size = get_efs_metered_size_gb('01d2ae932027ea024')
+    ebs_cost = pricing["EBS"]["per_gb_month"] * ebs_used_vol * hours
+    ecr_cost = pricing["ECR"]["per_gb_month"] * ecr_image_size * hours
+    cloudwatch_cost = (pricing["CloudWatch"]["ingestion"] * cloudwatch_logs_size + pricing["CloudWatch"]["storage"] * cloudwatch_logs_size) * hours
+    eks_cost = pricing["EKS"]["per_hour"] * hours
+    efs_cost = pricing["EFS"]["per_gb_month"] * efs_metered_size * hours # Assuming EFS usage similar to EBS
 
-# Start of the main script
-start_time = time.time()
+    total_cost = sum([instance_cost, ebs_cost, ecr_cost, cloudwatch_cost, eks_cost, efs_cost])
+    return total_cost
 
-(train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.cifar10.load_data()
 
-assert train_images.shape == (50000, 32, 32, 3)
-assert test_images.shape == (10000, 32, 32, 3)
-assert train_labels.shape == (50000, 1)
-assert test_labels.shape == (10000, 1)
+def get_used_ebs_volume_in_gb(path='/'):
+    stat = os.statvfs(path)
+    block_size = stat.f_frsize
+    total_blocks = stat.f_blocks
+    free_blocks = stat.f_bfree
+    used_blocks = total_blocks - free_blocks
+    return (used_blocks * block_size) / (1024 ** 3)
 
-# Split the training data into training and validation (taking last 5000 images)
-validation_images = train_images[-5000:]
-validation_labels = train_labels[-5000:]
+def get_cloudwatch_log_size():
+    client = boto3.client('logs')
+    log_groups = client.describe_log_groups()
+    total_size_bytes = sum(group['storedBytes'] for group in log_groups['logGroups'])
+    total_size_gb = total_size_bytes / (1024 ** 3)
+    return total_size_gb
 
-train_images = train_images[:-5000]
-train_labels = train_labels[:-5000]
-print(f"[DEBUG]: Data Loaded")
-print(f"[DEBUG]: Data Normalization Started..")
-train_images, validation_images = train_images / 255.0, validation_images / 255.0
-print(f"[DEBUG]: Data Normalization Completed..")
-# Adjust data type for memory optimization
-train_images = train_images.astype(np.float16)
-validation_images = validation_images.astype(np.float16)
+def get_ecr_image_size(repository_name):
+    client = boto3.client('ecr')
+    response = client.describe_images(repositoryName=repository_name, maxResults=1)
+    image_size_bytes = response['imageDetails'][0]['imageSizeInBytes']
+    image_size_gb = image_size_bytes / (1024 ** 3)
+    return image_size_gb
 
-print(f"[DEBUG]: Model Started..")
-# Creating model and compiling it within the strategy scope
-with strategy.scope():
-    baseline_cnn = tf.keras.models.Sequential([
-        tf.keras.layers.Conv2D(filters=10,kernel_size=(5,5),input_shape=(32,32,3),strides=(1,1), activation='relu',kernel_initializer='he_normal'),
-        tf.keras.layers.MaxPool2D((2,2),strides=2),
-        tf.keras.layers.Conv2D(10,kernel_size=(5,5),strides=(1,1),activation='relu',kernel_initializer='he_normal'),
-        tf.keras.layers.MaxPool2D((2,2),strides=2),
+def get_efs_metered_size_gb(file_system_id):
+    cloudwatch = boto3.client('cloudwatch')
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=1)  # adjust based on your needs
+
+    try:
+        response = cloudwatch.get_metric_statistics(
+            Namespace='AWS/EFS',
+            MetricName='MeteredSize',
+            Dimensions=[{'Name': 'FileSystemId', 'Value': file_system_id}],
+            StartTime=start_time,
+            EndTime=end_time,
+            Period=86400,  # one day
+            Statistics=['Average']
+        )
+        if response['Datapoints']:
+            metered_size_bytes = response['Datapoints'][0]['Average']
+            efs_metered_size = metered_size_bytes / (1024 ** 3)  # Convert from bytes to GB
+            return efs_metered_size
+        return None
+    except Exception as e:
+        print(f"Error fetching efs metered size: {e}")
+        return None
+
+def send_metric_to_cloudwatch(metric_name, value, namespace="MLTrainingMetrics"):
+    cloudwatch = boto3.client('cloudwatch')
+    cloudwatch.put_metric_data(
+        Namespace=namespace,
+        MetricData=[{'MetricName': metric_name, 'Value': value}]
+    )
+
+def data_creator(config):
+    (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.cifar10.load_data()
+    train_images, validation_images = train_images / 255.0, test_images / 255.0
+    train_images = train_images.astype(np.float16)
+    validation_images = validation_images.astype(np.float16)
+    global len_train_images 
+    len_train_images = len(train_images)
+    train_dataset = tf.data.Dataset.from_tensor_slices((train_images, train_labels)).batch(256)
+    val_dataset = tf.data.Dataset.from_tensor_slices((validation_images, test_labels)).batch(256)
+    return train_dataset, val_dataset
+
+def create_model(config):
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.Conv2D(10, (5, 5), activation='relu', input_shape=(32, 32, 3)),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.Conv2D(10, (5, 5), activation='relu'),
+        tf.keras.layers.MaxPooling2D((2, 2)),
         tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(20,activation='relu',kernel_initializer='he_normal'),
-        tf.keras.layers.Dense(10,activation=None,kernel_initializer='he_normal')])
-    
-    baseline_cnn.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-        metrics=[tf.keras.metrics.SparseCategoricalAccuracy()])
+        tf.keras.layers.Dense(20, activation='relu'),
+        tf.keras.layers.Dense(10)
+    ])
+    model.compile(optimizer='adam',
+                  loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+                  metrics=['accuracy'])
+    return model
 
-# Start the timer for training time
-training_start_time = time.time()
+def train_example():
+    ray.init(ignore_reinit_error=True)
+    training_start_time = time.time()
 
-baseline_cnn_his = baseline_cnn.fit(train_images, train_labels, epochs=100, batch_size=256, validation_data=(validation_images, validation_labels))
-print(f"[DEBUG]: Model Fitting Completed..")
-# End the timer for training time
-training_end_time = time.time()
+    trainer = TFTrainer(
+        model_creator=create_model,
+        data_creator=data_creator,
+        num_replicas=int(ray.available_resources().get("CPU", 1)),
+        use_gpu=False,
+        verbose=True
+    )
 
-# Extract and print the last epoch's metrics
-final_train_acc = baseline_cnn_his.history['sparse_categorical_accuracy'][-1]
-final_val_acc = baseline_cnn_his.history['val_sparse_categorical_accuracy'][-1]
-final_train_loss = baseline_cnn_his.history['loss'][-1]
-final_val_loss = baseline_cnn_his.history['val_loss'][-1]
+    for i in range(200): 
+        train_stats = trainer.train()
+        val_stats = trainer.validate()
+        print(f"[Epoch {i}] Train stats: {train_stats}, Validation stats: {val_stats}")
 
-print(f"Final Training Accuracy: {final_train_acc*100:.2f}%")
-print(f"Final Validation Accuracy: {final_val_acc*100:.2f}%")
-print(f"Final Training Loss: {final_train_loss:.4f}")
-print(f"Final Validation Loss: {final_val_loss:.4f}")
+    trainer.shutdown()
+    training_end_time = time.time()
 
-#save weights
-file_name = 'baseline.h5'
-baseline_cnn.save_weights(file_name)
+    # Calculating the metrics
+    training_time = training_end_time - training_start_time
+    latency = training_time / len_train_images
+    throughput = 1 / latency
+    memory_usage = psutil.virtual_memory().used / (1024 ** 3)
 
-#save model history
-history_dict = baseline_cnn_his.history
+    aws_cost_on_demand = estimate_aws_cost((training_end_time - training_start_time) / 3600)
+    aws_cost_spot = estimate_aws_cost((training_end_time - training_start_time) / 3600, pricing_model="Spot")
 
-# Save it to a JSON file
-with open('baseline_p3_history.json', 'w') as file:
-    json.dump(history_dict, file)
+    # Sending metrics data to CloudWatch
+    send_metric_to_cloudwatch("TotalExecutionTime_InSecs.", training_time)
+    send_metric_to_cloudwatch("Latency_SecondsPerImage", latency)
+    send_metric_to_cloudwatch("Throughput_ImagesPerSecond", throughput)
+    send_metric_to_cloudwatch("MemoryUsage_InGB", memory_usage)
+    send_metric_to_cloudwatch("EBSTotalUsedVolume_InGB", ebs_used_vol)
+    send_metric_to_cloudwatch("ECRImageSize_InGB", ecr_image_size)
+    send_metric_to_cloudwatch("EFSMeteredSize_InGB", efs_metered_size)
+    send_metric_to_cloudwatch("CloudWatchLogsSize_InGB", cloudwatch_logs_size)
+    send_metric_to_cloudwatch("AWSCostOnDemand_InUS$", aws_cost_on_demand)
+    send_metric_to_cloudwatch("AWSCostSpot_InUS$", aws_cost_spot)
 
-end_time = time.time()
-print(f"[DEBUG]: Process Completed.")
-print(f"[DEBUG]: Calculating Metrics..\n")
-# Calculating the metrics
-training_time = training_end_time - training_start_time
-latency = training_time / len(train_images)  # Time taken per image
-throughput = 1 / latency  # Images processed per second
-memory_usage = psutil.virtual_memory().used / (1024 ** 3)  # In GB
+    # Printing the metrics
+    print(f"Total Execution Time: {training_time:.2f} seconds")
+    print(f"Latency: {latency:.6f} seconds per image")
+    print(f"Throughput: {throughput:.2f} images per second")
+    print(f"Virtual Memory Usage: {memory_usage:.4f} GB")
+    print(f"Total EBS Used Volume: {ebs_used_vol:.4f} GB")
+    print(f"Total ECR Image Size: {ecr_image_size:.4f} GB")
+    if efs_metered_size is not None:
+        print(f"EFS Metered Size: {efs_metered_size:.4f} GB")
+    else:
+        print("Failed to fetch metered size.")
+    print(f"Total CloudWatch Logs Size: {cloudwatch_logs_size:.4f} GB")
+    print(f"Estimated AWS Cost (On Demand): {aws_cost_on_demand:.4f}")
+    print(f"Estimated AWS Cost (Spot): {aws_cost_spot:.4f}")
 
-# Estimated AWS cost (assuming you trained for the full duration of execution)
-aws_cost_on_demand = estimate_aws_cost((end_time - start_time) / 3600)  # Convert seconds to hours
-aws_cost_spot = estimate_aws_cost((end_time - start_time) / 3600, pricing_model="Spot")
-print(f"[DEBUG]: Printing Final Metrics..")
-print(f"Total Execution Time: {end_time - start_time:.2f} seconds")
-print(f"Training Time: {training_time:.2f} seconds")
-print(f"Latency: {latency:.6f} seconds per image")
-print(f"Throughput: {throughput:.2f} images per second")
-print(f"Memory Usage: {memory_usage:.2f} GB")
-print(f"Estimated AWS Cost (On Demand): ${aws_cost_on_demand:.2f}")
-print(f"Estimated AWS Cost Curent Type -> (Spot): ${aws_cost_spot:.2f}")
+if __name__ == "__main__":
+    start_time = time.time()
+    train_example()
