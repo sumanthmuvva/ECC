@@ -7,7 +7,7 @@ spec:
     spec:
       containers:
       - name: image-classification
-        image: 808556460535.dkr.ecr.us-east-1.amazonaws.com/image-classification:latest
+        image: 808556460535.dkr.ecr.us-east-1.amazonaws.com/image-classification-app:latest
         volumeMounts:
         - mountPath: /mnt/efs  # Mount path in the container
           name: efs-volume
