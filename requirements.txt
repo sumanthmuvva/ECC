@@ -2,3 +2,5 @@ matplotlib==3.7.1
 numpy==1.24.3
 psutil==5.8.0
 protobuf==3.20.0
+ray
+ray[sgd]
