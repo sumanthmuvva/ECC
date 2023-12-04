@@ -1,0 +1,22 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: MyEKScluster
+  region: us-east-1
+  version: "1.28"
+
+vpc:
+  subnets:
+    public:
+      us-east-1a: { id: subnet-017c1d96b58d61455 }
+      us-east-1b: { id: subnet-06722f74d18edae82 }
+
+nodeGroups:
+  - name: standard-workers
+    instanceType: c5a.large
+    desiredCapacity: 2
+    minSize: 1
+    maxSize: 3
+    iam:
+      instanceRoleARN: arn:aws:iam::808556460535:role/ECC-EKS-EC2-Role

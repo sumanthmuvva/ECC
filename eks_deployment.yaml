@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cifar10-training
+spec:
+  template:
+    metadata:
+      labels:
+        app: cifar10-training
+    spec:
+      containers:
+      - name: training-container
+        image: 808556460535.dkr.ecr.us-east-1.amazonaws.com/image-classification-eks:latest  # Replace with your Docker image
+        volumeMounts:
+        - mountPath: "/mnt/efs"
+          name: efs-volume
+        - mountPath: "/var/run/secrets/kubernetes.io/serviceaccount"
+          name: kube-api-access
+          readOnly: true
+
+      volumes:
+      - name: efs-volume
+        persistentVolumeClaim:
+          claimName: efs-pvc
+      - name: kube-api-access
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 7200
+              audience: api
+      restartPolicy: Never  # Important for Jobs
+  backoffLimit: 0  # Number of retries before considering the Job as failed
+
+
+
+
