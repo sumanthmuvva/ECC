@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Use ENTRYPOINT to always run the script when the container starts
-ENTRYPOINT [ "python", "./image_classification.py" ]
+ENTRYPOINT [ "python", "./image_classification_eks.py" ]
