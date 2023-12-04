@@ -9,6 +9,7 @@ import pickle
 from datetime import datetime, timedelta
 from kubernetes import client, config
 from ray.train.tensorflow import TensorflowTrainer
+from ray.train import ScalingConfig
 
 # # Function to get node count in the cluster
 # def get_node_count():
@@ -196,15 +197,21 @@ def main():
         'num_epochs': 100  # Adjust the number of epochs as needed
     }
 
-    trainer = TensorflowTrainer(
-        train_func=train_cifar,
-        num_workers=get_node_count(),
-        use_gpu=False,
-        config=config
-    )
+    # trainer = TensorflowTrainer(
+    #     train_func=train_cifar,
+    #     num_workers=get_node_count(),
+    #     use_gpu=False,
+    #     config=config
+    # )
 
+    trainer = TensorflowTrainer(
+        train_loop_per_worker=train_cifar,
+        scaling_config=ScalingConfig(num_workers=get_node_count(), use_gpu=False),
+        train_loop_config={"num_epochs": 100, "batch_size": 256, "dataset_path": "/mnt/efs/cifar-10-batches-py" },
+        )
+    
     for i in range(200):  # Adjust the number of epochs as needed
-        train_stats = trainer.train()
+        train_stats = trainer.fit()
         print(f"[Epoch {i}] Train stats: {train_stats}")
 
         # Save checkpoints and perform additional logging
