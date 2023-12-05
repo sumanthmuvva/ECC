@@ -7,41 +7,41 @@ import time
 import psutil
 import pickle
 from datetime import datetime, timedelta
-from kubernetes import client, config
+#from kubernetes import client, config
 from ray.train.tensorflow import TensorflowTrainer
 from ray.train import ScalingConfig
 
-# # Function to get node count in the cluster
+# Function to get node count in the cluster
 # def get_node_count():
 #     config.load_incluster_config()
 #     v1 = client.CoreV1Api()
 #     nodes = v1.list_node()
 #     return len(nodes.items)
 
-def get_node_count():
-    # Create EKS and EC2 clients
-    aws_region = "us-east-1"
-    eks_client = boto3.client('eks', region_name=aws_region)
-    ec2_client = boto3.client('ec2', region_name=aws_region)
+# def get_node_count():
+#     # Create EKS and EC2 clients
+#     aws_region = "us-east-1"
+#     eks_client = boto3.client('eks', region_name=aws_region)
+#     ec2_client = boto3.client('ec2', region_name=aws_region)
 
-    # Get the cluster VPC configuration
-    cluster_info = eks_client.describe_cluster(name="MyEKScluster")
-    vpc_config = cluster_info['cluster']['resourcesVpcConfig']
+#     # Get the cluster VPC configuration
+#     cluster_info = eks_client.describe_cluster(name="NewEKScluster")
+#     vpc_config = cluster_info['cluster']['resourcesVpcConfig']
 
-    # List all EC2 instances in the VPC
-    instances = ec2_client.describe_instances(
-        Filters=[
-            {'Name': 'vpc-id', 'Values': [vpc_config['vpcId']]},
-            {'Name': 'instance-state-name', 'Values': ['running']}
-        ]
-    )
+#     # List all EC2 instances in the VPC
+#     instances = ec2_client.describe_instances(
+#         Filters=[
+#             {'Name': 'vpc-id', 'Values': [vpc_config['vpcId']]},
+#             {'Name': 'instance-state-name', 'Values': ['running']}
+#         ]
+#     )
 
-    # Count the instances
-    count = sum(len(reservation['Instances']) for reservation in instances['Reservations'])
-    if count == 0:
-        return 0
-    else:
-        return count-1
+#     # Count the instances
+#     count = sum(len(reservation['Instances']) for reservation in instances['Reservations'])
+#     if count == 0:
+#         return 0
+#     else:
+#         return count-2
 
 
 # Function to load CIFAR-10 batch
@@ -87,7 +87,7 @@ def estimate_aws_cost(hours, instance_type="c5a.large", pricing_model="On Demand
     cloudwatch_cost = (pricing["CloudWatch"]["ingestion"] * cloudwatch_logs_size + pricing["CloudWatch"]["storage"] * cloudwatch_logs_size) * hours
     eks_cost = pricing["EKS"]["per_hour"] * hours
     efs_cost = pricing["EFS"]["per_gb_month"] * efs_metered_size * hours
-    instance_cost = 2 * pricing["c5a.large"]["On Demand"] * hours
+    instance_cost = 3 * pricing["c5a.large"]["On Demand"] * hours
     total_cost = sum([instance_cost, ebs_cost, ecr_cost, cloudwatch_cost, eks_cost, efs_cost])
     return total_cost
 
@@ -168,6 +168,7 @@ def create_model():
 
 def train_cifar(config):
     # Load dataset
+    checkpoint_dir=None
     (train_images, train_labels), (test_images, test_labels) = load_cifar10_dataset(config['dataset_path'])
 
     # Normalize datasets
@@ -187,7 +188,14 @@ def train_cifar(config):
                   metrics=['accuracy'])
 
     # Train the model
-    model.fit(train_images, train_labels, epochs=config['num_epochs'], batch_size=config['batch_size'])
+    for epoch in range(config['num_epochs']):
+        model.fit(train_images, train_labels, epochs=1, batch_size=config['batch_size'])
+
+        # Save checkpoint at specific epochs
+        if epoch % 2 == 0:
+            if checkpoint_dir:
+                checkpoint_path = os.path.join(checkpoint_dir, f"epoch_{epoch}")
+                model.save(checkpoint_path)
 
     # Evaluate the model
     test_loss, test_accuracy = model.evaluate(test_images, test_labels)
@@ -201,7 +209,7 @@ def main():
     config = {
         'dataset_path': "/mnt/efs/cifar-10-batches-py",
         'batch_size': 256,
-        'num_epochs': 5  # Adjust the number of epochs as needed
+        'num_epochs': 10  # Adjust the number of epochs as needed
     }
 
     # trainer = TensorflowTrainer(
@@ -211,19 +219,20 @@ def main():
     #     config=config
     # )
 
+
     trainer = TensorflowTrainer(
         train_loop_per_worker=train_cifar,
-        scaling_config=ScalingConfig(num_workers=get_node_count(), use_gpu=False),
-        train_loop_config={"num_epochs": 5, "batch_size": 256, "dataset_path": "/mnt/efs/cifar-10-batches-py" },
-        )
-    
-    for i in range(200):  # Adjust the number of epochs as needed
+        scaling_config=ScalingConfig(num_workers=1, use_gpu=False),
+        train_loop_config={
+            "num_epochs": 10, 
+            "batch_size": 256, 
+            "dataset_path": "/mnt/efs/cifar-10-batches-py",
+            "checkpoint_dir": "/mnt/efs/checkpoints"
+        },
+    )
+    for i in range(10):  # Adjust the number of epochs as needed
         train_stats = trainer.fit()
-        print(f"[Epoch {i}] Train stats: {train_stats}")
-
-        # Save checkpoints and perform additional logging
-        if i % 10 == 0:  # Adjust checkpoint frequency as needed
-            trainer.save("/mnt/efs/checkpoints")
+        print(f"Train stats: {train_stats}")
 
     trainer.shutdown()
     training_end_time = time.time()
@@ -237,17 +246,6 @@ def main():
     aws_cost_on_demand = estimate_aws_cost((training_end_time - training_start_time) / 3600)
     aws_cost_spot = estimate_aws_cost((training_end_time - training_start_time) / 3600, pricing_model="Spot")
 
-    # Sending metrics data to CloudWatch
-    send_metric_to_cloudwatch("TotalExecutionTime_InSecs.", training_time)
-    send_metric_to_cloudwatch("Latency_SecondsPerImage", latency)
-    send_metric_to_cloudwatch("Throughput_ImagesPerSecond", throughput)
-    send_metric_to_cloudwatch("MemoryUsage_InGB", memory_usage)
-    send_metric_to_cloudwatch("EBSTotalUsedVolume_InGB", ebs_used_vol)
-    send_metric_to_cloudwatch("ECRImageSize_InGB", ecr_image_size)
-    send_metric_to_cloudwatch("EFSMeteredSize_InGB", efs_metered_size)
-    send_metric_to_cloudwatch("CloudWatchLogsSize_InGB", cloudwatch_logs_size)
-    send_metric_to_cloudwatch("AWSCostOnDemand_InUS$", aws_cost_on_demand)
-    send_metric_to_cloudwatch("AWSCostSpot_InUS$", aws_cost_spot)
 
     # Printing the metrics
     print(f"Total Execution Time: {training_time:.2f} seconds")
@@ -263,6 +261,20 @@ def main():
     print(f"Total CloudWatch Logs Size: {cloudwatch_logs_size:.4f} GB")
     print(f"Estimated AWS Cost (On Demand): {aws_cost_on_demand:.4f}")
     print(f"Estimated AWS Cost (Spot): {aws_cost_spot:.4f}")
+
+    # Sending metrics data to CloudWatch
+    send_metric_to_cloudwatch("TotalExecutionTime_InSecs.", training_time)
+    send_metric_to_cloudwatch("Latency_SecondsPerImage", latency)
+    send_metric_to_cloudwatch("Throughput_ImagesPerSecond", throughput)
+    send_metric_to_cloudwatch("MemoryUsage_InGB", memory_usage)
+    send_metric_to_cloudwatch("EBSTotalUsedVolume_InGB", ebs_used_vol)
+    send_metric_to_cloudwatch("ECRImageSize_InGB", ecr_image_size)
+    send_metric_to_cloudwatch("EFSMeteredSize_InGB", efs_metered_size)
+    send_metric_to_cloudwatch("CloudWatchLogsSize_InGB", cloudwatch_logs_size)
+    send_metric_to_cloudwatch("AWSCostOnDemand_InUS$", aws_cost_on_demand)
+    send_metric_to_cloudwatch("AWSCostSpot_InUS$", aws_cost_spot)
+
+
 
 if __name__ == "__main__":
     start_time = time.time()
