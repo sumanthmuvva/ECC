@@ -2,21 +2,38 @@ apiVersion: eksctl.io/v1alpha5
 kind: ClusterConfig
 
 metadata:
-  name: MyEKScluster
+  name: NewEKScluster
   region: us-east-1
   version: "1.28"
 
 vpc:
+  id: "vpc-0d984f6bd7e6a0d40"
   subnets:
     public:
-      us-east-1a: { id: subnet-017c1d96b58d61455 }
-      us-east-1b: { id: subnet-06722f74d18edae82 }
+      us-east-1a:
+        id: "subnet-0744e8f080758b364"
+      us-east-1b:
+        id: "subnet-0655ca6dab745c8fb"
+      us-east-1c:
+        id: "subnet-0ef85c9bb54be5404"
+      us-east-1d:
+        id: "subnet-01afc46c1a5ef63b0"
 
 nodeGroups:
-  - name: standard-workers
+  - name: new-standard-workers
     instanceType: c5a.large
-    desiredCapacity: 2
-    minSize: 1
-    maxSize: 3
+    desiredCapacity: 4
+    minSize: 4
+    maxSize: 4
+    ssh:
+      allow: true
+      publicKeyName: MyKeyPair
     iam:
-      instanceRoleARN: arn:aws:iam::808556460535:role/ECC-EKS-EC2-Role
+      withAddonPolicies:
+        autoScaler: true
+        externalDNS: true
+        appMesh: true
+        ebs: true
+        fsx: true
+        efs: true
+
