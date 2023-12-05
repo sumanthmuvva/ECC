@@ -6,6 +6,7 @@ ray==2.8.1
 ray[train]
 tensorflow==2.7.0
 tensorflow_intel==0.0.1
+tensorboardX==2.6
 fsspec
 pandas
 pyarrow
