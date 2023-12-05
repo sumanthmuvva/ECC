@@ -165,14 +165,20 @@ def create_model():
     return model
 
 # Training function for Ray
+
 def train_cifar(config):
     # Load dataset
     (train_images, train_labels), (test_images, test_labels) = load_cifar10_dataset(config['dataset_path'])
 
-    # Normalize and prepare datasets
-    train_images, test_images = train_images / 255.0, test_images / 255.0
-    train_images = train_images.astype(np.float16)
-    test_images = test_images.astype(np.float16)
+    # Normalize datasets
+    train_images = train_images / 255.0
+    test_images = test_images / 255.0
+
+    # Convert to NumPy arrays and ensure data type
+    train_images = np.array(train_images, dtype=np.float32)
+    train_labels = np.array(train_labels, dtype=np.int32)
+    test_images = np.array(test_images, dtype=np.float32)
+    test_labels = np.array(test_labels, dtype=np.int32)
 
     # Create and compile the model
     model = create_model()
@@ -187,6 +193,7 @@ def train_cifar(config):
     test_loss, test_accuracy = model.evaluate(test_images, test_labels)
     return {'loss': test_loss, 'accuracy': test_accuracy}
 
+
 # Main function
 def main():
     ray.init(ignore_reinit_error=True)
@@ -194,7 +201,7 @@ def main():
     config = {
         'dataset_path': "/mnt/efs/cifar-10-batches-py",
         'batch_size': 256,
-        'num_epochs': 100  # Adjust the number of epochs as needed
+        'num_epochs': 5  # Adjust the number of epochs as needed
     }
 
     # trainer = TensorflowTrainer(
@@ -207,7 +214,7 @@ def main():
     trainer = TensorflowTrainer(
         train_loop_per_worker=train_cifar,
         scaling_config=ScalingConfig(num_workers=get_node_count(), use_gpu=False),
-        train_loop_config={"num_epochs": 100, "batch_size": 256, "dataset_path": "/mnt/efs/cifar-10-batches-py" },
+        train_loop_config={"num_epochs": 5, "batch_size": 256, "dataset_path": "/mnt/efs/cifar-10-batches-py" },
         )
     
     for i in range(200):  # Adjust the number of epochs as needed
